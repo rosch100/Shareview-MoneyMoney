@@ -458,6 +458,13 @@ do
     true,
     "federation.foreignHost")
 
+  local _, httpErr = checkFederationFormAction("http://www.equiniti.com/adfs/ls/")
+  assertEq(
+    type(httpErr) == "string"
+      and httpErr:find("https", 1, true) ~= nil,
+    true,
+    "federation.httpRejected")
+
   local holdingsCalls = 0
   local mockConn = {
     language = "",

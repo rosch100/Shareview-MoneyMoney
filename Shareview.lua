@@ -321,6 +321,9 @@ function resolveFederationActionUrl(action)
     return nil, "Federation-Hop: Form action fehlt"
   end
   if action:match("^https?://") then
+    if not action:match("^https://") then
+      return nil, "Federation-Hop: nur https:// erlaubt"
+    end
     return action, nil
   end
   if action:sub(1, 1) == "/" then
@@ -621,6 +624,8 @@ function EndSession()
       pcall(function() connection:get(CONSTANTS.logoutUrl) end)
     end
   end
+  session.pendingUsername = nil
+  session.pendingPassword = nil
   session = { cookies = "", persistedConnection = false }
   connection = nil
   if storage ~= nil and not wasPersisted then
