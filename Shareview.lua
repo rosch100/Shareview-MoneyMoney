@@ -8,7 +8,7 @@
 --
 
 WebBanking{
-  version     = 1.02,
+  version     = 1.03,
   url         = "https://portfolio.shareview.co.uk",
   services    = {"Shareview"},
   description = "Equiniti Shareview Portfolio - Direct Login (Username + Password + DOB + MFA)"
@@ -106,6 +106,14 @@ end
 local function submitForm(formNode)
   if not formNode or formNode:length() == 0 then
     return nil, "Form-Element nicht gefunden (XPath traf nicht)."
+  end
+  -- Empty action posts to the current document URL (already on an allowlisted host).
+  local action = formNode:attr("action")
+  if type(action) == "string" and trim(action) ~= "" then
+    local _, actionErr = checkFederationFormAction(action)
+    if actionErr then
+      return nil, actionErr
+    end
   end
   local content = connection:request(formNode:submit())
   return content
