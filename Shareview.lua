@@ -8,14 +8,15 @@
 --
 
 WebBanking{
-  version     = 1.02,
+  version     = 1.04,
   url         = "https://portfolio.shareview.co.uk",
   services    = {"Shareview"},
   description = "Equiniti Shareview Portfolio - Direct Login (Username + Password + DOB + MFA)"
 }
 
 local CONSTANTS = {
-  accountNumber = "shareview-portfolio",
+  legacyAccountNumber = "shareview-portfolio",
+  accountNumberPrefix = "SV.",
   baseUrl     = "https://portfolio.shareview.co.uk",
   loginUrl    = "https://portfolio.shareview.co.uk/7/Portfolio/default/en/anonymous/Pages/Login.aspx",
   holdingsUrl = "https://portfolio.shareview.co.uk/7/portfolio/default/en/Active/Pages/holdingssummary.aspx",
@@ -43,6 +44,22 @@ local session = { cookies = "", persistedConnection = false }
 local function trim(text)
   if not text then return "" end
   return (text:gsub("^%s*(.-)%s*$", "%1"))
+end
+
+local function normalizeAccountKey(key)
+  if key == nil then
+    return ""
+  end
+  return trim(tostring(key)):lower()
+end
+
+local function accountKeysMatch(storedKey, currentKey)
+  storedKey = normalizeAccountKey(storedKey)
+  currentKey = normalizeAccountKey(currentKey)
+  if storedKey == "" or currentKey == "" then
+    return true
+  end
+  return storedKey == currentKey
 end
 
 local function htmlDecode(text)
@@ -83,6 +100,57 @@ function parseUsernameDob(rawUsername)
   local user, dob = rawUsername:match("^([^|]+)|(.+)$")
   if not user then return trim(rawUsername) end
   return trim(user), parseDobString(dob)
+end
+
+--- Login identity without DOB suffix (multi-login accountKey / accountNumber).
+function shareviewLoginUsername(rawUsername)
+  local user = parseUsernameDob(rawUsername)
+  if type(user) ~= "string" or user == "" then
+    return nil
+  end
+  return user
+end
+
+function shareviewAccountNumberForUsername(username)
+  if type(username) ~= "string" or username == "" then
+    return nil
+  end
+  return CONSTANTS.accountNumberPrefix .. username
+end
+
+function shareviewAccountNameForUsername(username)
+  if type(username) ~= "string" or username == "" then
+    return "Shareview"
+  end
+  return "Shareview (" .. username .. ")"
+end
+
+function isLegacyShareviewAccountNumber(accountNumber)
+  return accountNumber == CONSTANTS.legacyAccountNumber
+end
+
+function knownAccountsIncludeLegacyShareview(knownAccounts)
+  if type(knownAccounts) ~= "table" then
+    return false
+  end
+  for _, acc in ipairs(knownAccounts) do
+    if type(acc) == "table" and isLegacyShareviewAccountNumber(acc.accountNumber) then
+      return true
+    end
+  end
+  return false
+end
+
+function matchesActiveShareviewAccount(accountNumber)
+  if type(accountNumber) ~= "string" or accountNumber == "" then
+    return false
+  end
+  -- Existing MoneyMoney accounts keep shareview-portfolio; still refresh.
+  if isLegacyShareviewAccountNumber(accountNumber) then
+    return type(session.loginUsername) == "string" and session.loginUsername ~= ""
+  end
+  local expected = session.accountNumber
+  return type(expected) == "string" and accountNumber == expected
 end
 
 function parseCurrencyValue(raw)
@@ -131,35 +199,160 @@ function SupportsBank(protocol, bankCode)
   return protocol == ProtocolWebBanking and bankCode == "Shareview"
 end
 
-local function restoreShareviewConnection(accountKey)
+function restoreShareviewConnection(accountKey)
   local storage = rawget(_G, "LocalStorage")
-  local canReuse = storage
-    and storage.connection
-    and storage.connectionAccountKey == accountKey
+  accountKey = accountKey or ""
+  if not storage then
+    connection = Connection()
+    session.persistedConnection = false
+    connection.language = "en-GB"
+    connection.useragent = CONSTANTS.userAgent
+    return false
+  end
+
+  storage.connectionsByAccount = storage.connectionsByAccount or {}
+  local entry = storage.connectionsByAccount[accountKey]
+  if storage.connection ~= nil and storage.connectionAccountKey == accountKey then
+    entry = entry or {}
+    entry.connection = storage.connection
+    if type(storage.sessionCookies) == "string"
+        and storage.sessionCookies ~= ""
+        and entry.sessionCookies == nil then
+      entry.sessionCookies = storage.sessionCookies
+    end
+    storage.connectionsByAccount[accountKey] = entry
+  end
+  local canReuse = entry ~= nil and entry.connection ~= nil
   if canReuse then
-    connection = storage.connection
+    connection = entry.connection
     session.persistedConnection = true
   else
     connection = Connection()
-    if storage then
-      storage.connection = connection
-      storage.connectionAccountKey = accountKey
-      session.persistedConnection = true
-    end
+    entry = entry or {}
+    entry.connection = connection
+    storage.connectionsByAccount[accountKey] = entry
+    session.persistedConnection = true
   end
+  storage.connection = connection
+  storage.connectionAccountKey = accountKey
   connection.language = "en-GB"
   connection.useragent = CONSTANTS.userAgent
+  return canReuse
+end
+
+function applyShareviewCookieHeader(cookieHeader)
+  local formatted = trim(cookieHeader or "")
+  if formatted == "" then
+    return false
+  end
+  session.cookies = formatted
+  if connection and type(connection.setCookie) == "function" then
+    for pair in formatted:gmatch("[^;]+") do
+      local name, value = pair:match("^%s*([^=]+)=(.+)$")
+      if name and value then
+        pcall(function()
+          connection:setCookie(trim(name) .. "=" .. trim(value))
+        end)
+      end
+    end
+  end
+  return true
+end
+
+function collectShareviewCookieHeader()
+  if connection and type(connection.getCookies) == "function" then
+    local jarCookies = connection:getCookies()
+    if type(jarCookies) == "string" and jarCookies ~= "" then
+      return jarCookies
+    end
+  end
+  if type(session.cookies) == "string" and session.cookies ~= "" then
+    return session.cookies
+  end
+  return nil
+end
+
+function persistShareviewSessionCookies()
+  local cookies = collectShareviewCookieHeader()
+  if not cookies or not cookies:match("FedAuth=") then
+    return false
+  end
+  local storage = rawget(_G, "LocalStorage")
+  if not storage then
+    session.cookies = cookies
+    return false
+  end
+  local accountKey = session.accountKey or storage.connectionAccountKey or ""
+  if accountKey == "" then
+    return false
+  end
+  storage.connectionsByAccount = storage.connectionsByAccount or {}
+  local entry = storage.connectionsByAccount[accountKey] or {}
+  entry.connection = connection
+  entry.sessionCookies = cookies
+  storage.connectionsByAccount[accountKey] = entry
+  storage.sessionCookies = cookies
+  storage.sessionAccountKey = accountKey
+  storage.connection = connection
+  storage.connectionAccountKey = accountKey
+  session.cookies = cookies
+  return true
+end
+
+function tryRestoreShareviewSessionCookies(accountKey)
+  local storage = rawget(_G, "LocalStorage")
+  if not storage then
+    return false
+  end
+  accountKey = accountKey or ""
+  local cookies = nil
+  local entry = storage.connectionsByAccount and storage.connectionsByAccount[accountKey]
+  if entry and type(entry.sessionCookies) == "string" and entry.sessionCookies ~= "" then
+    cookies = entry.sessionCookies
+  elseif type(storage.sessionCookies) == "string" and storage.sessionCookies ~= "" then
+    if accountKeysMatch(storage.sessionAccountKey or "", accountKey) then
+      cookies = storage.sessionCookies
+    end
+  end
+  if not cookies or not cookies:match("FedAuth=") then
+    return false
+  end
+  return applyShareviewCookieHeader(cookies)
+end
+
+function tryHoldingsWithCurrentSession()
+  local holdings = connection:get(CONSTANTS.holdingsUrl)
+  if holdings and holdings ~= "" and isLoggedInPage(holdings) then
+    session.holdingsHtmlString = holdings
+    persistShareviewSessionCookies()
+    return true
+  end
+  return false
+end
+
+function bindShareviewLoginIdentity(rawUsername)
+  local username = shareviewLoginUsername(rawUsername)
+  if not username then
+    session.loginUsername = nil
+    session.accountNumber = nil
+    return nil
+  end
+  session.loginUsername = username
+  session.accountNumber = shareviewAccountNumberForUsername(username)
+  return username
 end
 
 function InitializeSession2(protocol, bankCode, step, credentials, interactive)
   if step == 1 then
-    local accountKey = credentials and credentials[1] or ""
+    local rawUsername = credentials and credentials[1] or ""
+    local accountKey = bindShareviewLoginIdentity(rawUsername) or rawUsername
     session.accountKey = accountKey
     restoreShareviewConnection(accountKey)
 
-    local holdings = connection:get(CONSTANTS.holdingsUrl)
-    if holdings and holdings ~= "" and isLoggedInPage(holdings) then
-      session.holdingsHtmlString = holdings
+    if tryHoldingsWithCurrentSession() then
+      return nil
+    end
+    if tryRestoreShareviewSessionCookies(accountKey) and tryHoldingsWithCurrentSession() then
       return nil
     end
     return loginStep1(credentials, interactive)
@@ -243,6 +436,7 @@ function submitCredentials(username, password, day, month, year)
 
   if isLoggedInPage(mfaContent) then
     session.holdingsHtmlString = mfaContent
+    persistShareviewSessionCookies()
     return nil
   end
 
@@ -307,9 +501,7 @@ function finishMfaAfterFederation(hopContent, hopErr)
   if hopErr then
     return hopErr
   end
-  local holdings = connection:get(CONSTANTS.holdingsUrl)
-  if holdings and isLoggedInPage(holdings) then
-    session.holdingsHtmlString = holdings
+  if tryHoldingsWithCurrentSession() then
     return nil
   end
   return "MFA fehlgeschlagen. Bitte Anmeldung erneut starten; bei wiederholten Fehlversuchen kann das Konto temporaer gesperrt sein."
@@ -422,8 +614,9 @@ function loginWithImportedCookies(cookieString)
     return "Cookie-Import fehlgeschlagen. Cookies abgelaufen — bitte erneut exportieren."
   end
 
-  session.cookies = formatted
+  applyShareviewCookieHeader(formatted)
   session.holdingsHtmlString = response
+  persistShareviewSessionCookies()
   return nil
 end
 
@@ -479,10 +672,20 @@ function ListAccounts(knownAccounts)
   if not session.holdingsHtmlString or not isLoggedInPage(session.holdingsHtmlString) then
     return "Holdings-Seite nicht zugänglich. Session abgelaufen?"
   end
+  local username = session.loginUsername
+  local accountNumber = session.accountNumber
+  if type(username) ~= "string" or username == ""
+      or type(accountNumber) ~= "string" or accountNumber == "" then
+    return "Shareview: Login-Benutzername fehlt für die Kontonummer."
+  end
+  -- Keep offering the legacy number when MoneyMoney already has that account.
+  if knownAccountsIncludeLegacyShareview(knownAccounts) then
+    accountNumber = CONSTANTS.legacyAccountNumber
+  end
   return {
     {
-      name          = "Shareview Portfolio",
-      accountNumber = CONSTANTS.accountNumber,
+      name          = shareviewAccountNameForUsername(username),
+      accountNumber = accountNumber,
       portfolio     = true,
       currency      = "GBP",
       type          = AccountTypePortfolio,
@@ -492,7 +695,10 @@ function ListAccounts(knownAccounts)
 end
 
 function RefreshAccount(account, since)
-  if not account or account.accountNumber ~= CONSTANTS.accountNumber then
+  if not account or type(account.accountNumber) ~= "string" then
+    error("Shareview: Kontoabruf für unbekanntes Konto nicht möglich.")
+  end
+  if not matchesActiveShareviewAccount(account.accountNumber) then
     error("Shareview: Kontoabruf für unbekanntes Konto nicht möglich.")
   end
 
@@ -619,16 +825,27 @@ end
 function EndSession()
   local wasPersisted = session.persistedConnection == true
   local storage = rawget(_G, "LocalStorage")
-  if connection then
-    if not wasPersisted then
-      pcall(function() connection:get(CONSTANTS.logoutUrl) end)
-    end
+  local accountKey = session.accountKey or ""
+  if wasPersisted then
+    persistShareviewSessionCookies()
+  elseif connection then
+    pcall(function() connection:get(CONSTANTS.logoutUrl) end)
   end
   session.pendingUsername = nil
   session.pendingPassword = nil
   session = { cookies = "", persistedConnection = false }
   connection = nil
-  if storage ~= nil and not wasPersisted then
+  if storage == nil then
+    return
+  end
+  if not wasPersisted and accountKey ~= "" and type(storage.connectionsByAccount) == "table" then
+    storage.connectionsByAccount[accountKey] = nil
+    if storage.sessionAccountKey == accountKey then
+      storage.sessionCookies = nil
+      storage.sessionAccountKey = nil
+    end
+  end
+  if storage.connectionAccountKey == accountKey then
     storage.connection = nil
     storage.connectionAccountKey = nil
   end

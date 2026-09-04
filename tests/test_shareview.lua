@@ -240,6 +240,20 @@ assertEq(
   false,
   "isCredentialRejectionMessage.technical")
 
+assertEq(shareviewLoginUsername("alice|01.01.1970"), "alice", "shareviewLoginUsername.pipe")
+assertEq(shareviewLoginUsername("bob"), "bob", "shareviewLoginUsername.plain")
+assertEq(shareviewAccountNumberForUsername("alice"), "SV.alice", "shareviewAccountNumber")
+assertEq(shareviewAccountNameForUsername("alice"), "Shareview (alice)", "shareviewAccountName")
+assertEq(isLegacyShareviewAccountNumber("shareview-portfolio"), true, "legacyAccountNumber")
+assertEq(
+  knownAccountsIncludeLegacyShareview({{accountNumber = "shareview-portfolio"}}),
+  true,
+  "knownAccountsIncludeLegacy")
+assertEq(
+  knownAccountsIncludeLegacyShareview({{accountNumber = "SV.alice"}}),
+  false,
+  "knownAccountsExcludeSv")
+
 local firstConnection = {
   language = "",
   useragent = "",
@@ -256,11 +270,18 @@ local dobChallenge = InitializeSession2(
   {"restore-user", "password"},
   true)
 assertEq(type(dobChallenge), "table", "InitializeSession2.dobChallenge")
+assertEq(
+  LocalStorage.connectionsByAccount["restore-user"].connection,
+  firstConnection,
+  "InitializeSession2.connectionMap")
+assertEq(LocalStorage.connectionAccountKey, "restore-user",
+  "InitializeSession2.connectionAccountKey")
 local restoredConnection = {
   language = "",
   useragent = "",
   get = function() return nil end,
 }
+LocalStorage.connectionsByAccount["restore-user"] = { connection = restoredConnection }
 LocalStorage.connection = restoredConnection
 LocalStorage.connectionAccountKey = "restore-user"
 InitializeSession2(
@@ -273,7 +294,7 @@ assertEq(restoredConnection.language, "en-GB",
   "InitializeSession2.restoresConnectionForStep2")
 local refreshOk, refreshError = pcall(
   RefreshAccount,
-  {accountNumber = "shareview-portfolio"},
+  {accountNumber = "SV.restore-user"},
   nil)
 assertEq(refreshOk, false, "RefreshAccount.propagatesFailure")
 assertEq(
@@ -286,7 +307,7 @@ restoredConnection.get = function()
 end
 local unauthenticatedOk, unauthenticatedError = pcall(
   RefreshAccount,
-  {accountNumber = "shareview-portfolio"},
+  {accountNumber = "SV.restore-user"},
   nil)
 assertEq(unauthenticatedOk, false, "RefreshAccount.rejectsUnauthenticatedPage")
 assertEq(
@@ -314,7 +335,7 @@ InitializeSession2(
   true)
 local incompletePortfolioOk, incompletePortfolioError = pcall(
   RefreshAccount,
-  {accountNumber = "shareview-portfolio"},
+  {accountNumber = "SV.restore-user"},
   nil)
 assertEq(incompletePortfolioOk, false, "RefreshAccount.rejectsIncompletePortfolio")
 assertEq(
@@ -344,7 +365,7 @@ restoredConnection.get = function()
   return missingTotalHtml
 end
 local missingTotalPortfolio = RefreshAccount(
-  {accountNumber = "shareview-portfolio"},
+  {accountNumber = "SV.restore-user"},
   nil)
 assertEq(missingTotalPortfolio.balance, nil, "RefreshAccount.omitsMissingOptionalTotal")
 assertEq(#missingTotalPortfolio.securities, 1, "RefreshAccount.keepsCompletePositionsWithoutTotal")
@@ -354,7 +375,7 @@ restoredConnection.get = function()
 end
 local missingHoldingsMarkupOk, missingHoldingsMarkupError = pcall(
   RefreshAccount,
-  {accountNumber = "shareview-portfolio"},
+  {accountNumber = "SV.restore-user"},
   nil)
 assertEq(missingHoldingsMarkupOk, false, "RefreshAccount.rejectsMissingHoldingsMarkup")
 assertEq(
@@ -397,10 +418,133 @@ assertEq(
 restoredConnection.get = function()
   return holdingsPage("200.00")
 end
-local freshPortfolio = RefreshAccount(
+local legacyOk, legacyPortfolio = pcall(
+  RefreshAccount,
   {accountNumber = "shareview-portfolio"},
   nil)
+assertEq(legacyOk, true, "RefreshAccount.acceptsLegacyAccountNumber")
+assertEq(legacyPortfolio.balance, 200, "RefreshAccount.legacyFetchesHoldings")
+
+local freshPortfolio = RefreshAccount(
+  {accountNumber = "SV.restore-user"},
+  nil)
 assertEq(freshPortfolio.balance, 200, "RefreshAccount.fetchesFreshHoldings")
+
+-- Multi-login: two accountKeys keep distinct connections in the map
+do
+  local connA = { language = "", useragent = "", get = function() return nil end }
+  local connB = { language = "", useragent = "", get = function() return nil end }
+  local created = 0
+  Connection = function()
+    created = created + 1
+    if created == 1 then return connA end
+    if created == 2 then return connB end
+    return { language = "", useragent = "", get = function() return nil end }
+  end
+  LocalStorage = {}
+  InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"user-a|01.01.1970", "pw"}, true)
+  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA")
+  assertEq(shareviewAccountNumberForUsername("user-a"), "SV.user-a", "multiLogin.accountNumber.userA")
+  InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"user-b|02.02.1980", "pw"}, true)
+  assertEq(LocalStorage.connectionsByAccount["user-b"].connection, connB, "multiLogin.map.userB")
+  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA.kept")
+  assertEq(LocalStorage.connectionAccountKey, "user-b", "multiLogin.activeKey.userB")
+  InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"user-a|01.01.1970", "pw"}, true)
+  assertEq(LocalStorage.connection, connA, "multiLogin.reusesUserA")
+  assertEq(LocalStorage.connectionAccountKey, "user-a", "multiLogin.activeKey.userA")
+  EndSession()
+end
+
+-- After MoneyMoney restart: Connection gone, FedAuth cookie string must restore session
+do
+  local holdingsHtml = [[
+<html><body>
+  <div id="TotalIndicativeValue"><span>GBP|10.00||0|.|,|</span></div>
+  <h1>My Holdings Summary</h1>
+</body></html>
+]]
+  local applied = {}
+  local cookieApplied = false
+  local mockConn = {
+    language = "",
+    useragent = "",
+    getCookies = function()
+      if cookieApplied then
+        return "FedAuth=TOKEN123"
+      end
+      return ""
+    end,
+    setCookie = function(_, value)
+      applied[#applied + 1] = value
+      if tostring(value):match("FedAuth=") then
+        cookieApplied = true
+      end
+    end,
+    get = function()
+      if cookieApplied then
+        return holdingsHtml
+      end
+      return "<html><body>Please log in</body></html>"
+    end,
+  }
+  Connection = function() return mockConn end
+  LocalStorage = {
+    connectionsByAccount = {
+      ["cookie-user"] = {
+        sessionCookies = "FedAuth=TOKEN123; Path=/",
+      },
+    },
+    sessionCookies = "FedAuth=TOKEN123; Path=/",
+    sessionAccountKey = "cookie-user",
+  }
+  local result = InitializeSession2(
+    ProtocolWebBanking,
+    "Shareview",
+    1,
+    {"cookie-user|01.01.1970", "pw"},
+    true)
+  assertEq(result, nil, "cookieRestore.afterRestart.noLogin")
+  assertEq(#applied > 0, true, "cookieRestore.afterRestart.setCookie")
+  assertEq(
+    LocalStorage.connectionsByAccount["cookie-user"].sessionCookies:match("FedAuth=") ~= nil,
+    true,
+    "cookieRestore.afterRestart.persisted")
+  EndSession()
+  assertEq(
+    LocalStorage.connectionsByAccount["cookie-user"].sessionCookies:match("FedAuth=") ~= nil,
+    true,
+    "cookieRestore.endSession.keepsCookies")
+end
+
+-- ListAccounts keeps legacy number when MoneyMoney already knows it
+do
+  local holdingsHtml = [[
+<html><body>
+  <div id="TotalIndicativeValue"><span>GBP|10.00||0|.|,|</span></div>
+  <h1>My Holdings Summary</h1>
+</body></html>
+]]
+  local mockConn = {
+    language = "",
+    useragent = "",
+    get = function() return holdingsHtml end,
+  }
+  Connection = function() return mockConn end
+  LocalStorage = {}
+  InitializeSession2(
+    ProtocolWebBanking,
+    "Shareview",
+    1,
+    {"legacy-user", "password"},
+    true)
+  -- Force logged-in holdings into session via ListAccounts path
+  local accountsNew = ListAccounts({})
+  assertEq(type(accountsNew), "table", "ListAccounts.new.type")
+  assertEq(accountsNew[1].accountNumber, "SV.legacy-user", "ListAccounts.new.svNumber")
+  local accountsLegacy = ListAccounts({{accountNumber = "shareview-portfolio"}})
+  assertEq(accountsLegacy[1].accountNumber, "shareview-portfolio", "ListAccounts.keepsLegacyNumber")
+  EndSession()
+end
 
 EndSession()
 local authFailures = {}
