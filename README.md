@@ -33,6 +33,12 @@ Mehrere Shareview-Logins: je einen Bankzugang mit eigenen Zugangsdaten anlegen.
 Neue Konten heißen nach dem Login-Namen. Bestehende Konten mit der früheren
 Nummer werden weiter aktualisiert — keine Neu-Anlage nötig.
 
+## Fehler & Ideen
+
+Issues bitte über GitHub melden:
+[Neues Issue](https://github.com/rosch100/Shareview-MoneyMoney/issues/new/choose).
+Keine MoneyMoney-Logdateien anhängen — Details stehen im Bug-Formular.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).
