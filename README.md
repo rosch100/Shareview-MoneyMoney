@@ -8,14 +8,14 @@ Gemeinsame Infos: https://github.com/rosch100/moneymoney-extensions
 
 ## Installation
 
-Unsignierte Datei:
+Datei (inkl. MoneyMoney Signatur, wie auf moneymoney-app.com):
 [Shareview.lua](https://raw.githubusercontent.com/rosch100/Shareview-MoneyMoney/main/Shareview.lua)
 
 Datei nach
 `~/Library/Containers/com.moneymoney-app.retail/Data/Library/Application Support/MoneyMoney/Extensions`
 kopieren, oder im Klon `./link_ext.sh` ausführen.
 
-Unsignierte Plugins: MoneyMoney-**Beta**, Signaturprüfung unter
+Entwicklungs-Plugins ohne gültige Signatur: MoneyMoney-**Beta**, Signaturprüfung unter
 *MoneyMoney → Einstellungen → Erweiterungen* ausschalten.
 
 ## Einrichten
