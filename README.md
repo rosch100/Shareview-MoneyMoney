@@ -2,7 +2,7 @@
 
 Shareview-Portfolio in MoneyMoney.
 
-Version: **1.04**
+Version: **1.05**
 Repository: https://github.com/rosch100/Shareview-MoneyMoney
 Gemeinsame Infos: https://github.com/rosch100/moneymoney-extensions
 

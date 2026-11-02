@@ -8,7 +8,7 @@
 --
 
 WebBanking{
-  version     = 1.04,
+  version     = 1.05,
   url         = "https://portfolio.shareview.co.uk",
   services    = {"Shareview"},
   description = "Equiniti Shareview Portfolio - Direct Login (Username + Password + DOB + MFA)"
@@ -849,4 +849,3 @@ function EndSession()
   end
 end
 
--- SIGNATURE: MCwCFFzhulB5Xr0AiLOy1JfsxEVytmTCAhRSUgPXjZTslcSYZD0Lvuf8GsFgcQ==
