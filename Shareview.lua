@@ -347,6 +347,7 @@ function InitializeSession2(protocol, bankCode, step, credentials, interactive)
     local rawUsername = credentials and credentials[1] or ""
     local accountKey = bindShareviewLoginIdentity(rawUsername) or rawUsername
     session.accountKey = accountKey
+    session.holdingsHtmlString = nil
     restoreShareviewConnection(accountKey)
 
     if tryHoldingsWithCurrentSession() then
@@ -702,12 +703,9 @@ function RefreshAccount(account, since)
     error("Shareview: Kontoabruf für unbekanntes Konto nicht möglich.")
   end
 
-  local html = connection:get(CONSTANTS.holdingsUrl)
+  -- Die Anmeldung hat die Holdings-Seite bereits geladen und geprüft (InitializeSession2).
+  local html = session.holdingsHtmlString
   if not html then
-    error("Shareview: Kontoabruf fehlgeschlagen, Holdings-Seite nicht erreichbar.")
-  end
-  session.holdingsHtmlString = html
-  if not isLoggedInPage(html) then
     error("Shareview: Kontoabruf fehlgeschlagen, Holdings-Seite ist nicht authentifiziert.")
   end
   if not html:find("summaryDataItemRow", 1, true) then

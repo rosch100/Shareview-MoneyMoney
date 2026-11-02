@@ -305,6 +305,13 @@ assertEq(
 restoredConnection.get = function()
   return "<html><body>Sign in</body></html>"
 end
+local unauthenticatedLogin = InitializeSession2(
+  ProtocolWebBanking,
+  "Shareview",
+  1,
+  {"restore-user", "password"},
+  true)
+assertEq(unauthenticatedLogin ~= nil, true, "InitializeSession2.unauthenticatedPageRequiresLogin")
 local unauthenticatedOk, unauthenticatedError = pcall(
   RefreshAccount,
   {accountNumber = "SV.restore-user"},
@@ -364,6 +371,7 @@ assertEq(missingTotalIncomplete, 0, "RefreshAccount.missingTotalFixtureComplete"
 restoredConnection.get = function()
   return missingTotalHtml
 end
+InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"restore-user", "password"}, true)
 local missingTotalPortfolio = RefreshAccount(
   {accountNumber = "SV.restore-user"},
   nil)
@@ -373,6 +381,7 @@ assertEq(#missingTotalPortfolio.securities, 1, "RefreshAccount.keepsCompletePosi
 restoredConnection.get = function()
   return '<html><body><div id="TotalIndicativeValue"><span>GBP|100.00||0|.|,|</span></div></body></html>'
 end
+InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"restore-user", "password"}, true)
 local missingHoldingsMarkupOk, missingHoldingsMarkupError = pcall(
   RefreshAccount,
   {accountNumber = "SV.restore-user"},
@@ -415,20 +424,20 @@ assertEq(
   true,
   "RefreshAccount.invalidAccountMessage")
 
+local holdingsGets = 0
 restoredConnection.get = function()
+  holdingsGets = holdingsGets + 1
   return holdingsPage("200.00")
 end
+InitializeSession2(ProtocolWebBanking, "Shareview", 1, {"restore-user", "password"}, true)
 local legacyOk, legacyPortfolio = pcall(
   RefreshAccount,
   {accountNumber = "shareview-portfolio"},
   nil)
 assertEq(legacyOk, true, "RefreshAccount.acceptsLegacyAccountNumber")
-assertEq(legacyPortfolio.balance, 200, "RefreshAccount.legacyFetchesHoldings")
-
-local freshPortfolio = RefreshAccount(
-  {accountNumber = "SV.restore-user"},
-  nil)
-assertEq(freshPortfolio.balance, 200, "RefreshAccount.fetchesFreshHoldings")
+assertEq(legacyPortfolio.balance, 200, "RefreshAccount.legacyUsesSessionHoldings")
+-- Regression: Die Holdings-Seite wird nur einmal geladen (Anmeldung), nicht erneut beim Kontoabruf.
+assertEq(holdingsGets, 1, "RefreshAccount.singleHoldingsRequest")
 
 -- Multi-login: two accountKeys keep distinct connections in the map
 do
