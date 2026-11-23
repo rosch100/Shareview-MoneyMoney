@@ -619,11 +619,15 @@ do
     "federation.httpRejected")
 
   local holdingsCalls = 0
+  local healthCheckPage = false
   local mockConn = {
     language = "",
     useragent = "",
     get = function()
       holdingsCalls = holdingsCalls + 1
+      if healthCheckPage then
+        return "<html><head><title>Account Health Checks - Landing</title></head></html>"
+      end
       return "<html></html>"
     end,
     getCookies = function() return "" end,
@@ -647,6 +651,18 @@ do
     "Federation-Hop zu nicht erlaubtem Host: evil.example",
     "finishMfaAfterFederation.propagatesErr")
   assertEq(holdingsCalls, 0, "finishMfaAfterFederation.noHoldingsOnErr")
+
+  healthCheckPage = true
+  local healthMsg = finishMfaAfterFederation(nil, nil)
+  assertEq(
+    type(healthMsg) == "string" and healthMsg:find("Account Health Check", 1, true) ~= nil,
+    true,
+    "finishMfaAfterFederation.healthCheckMessage")
+  assertEq(
+    type(healthMsg) == "string" and healthMsg:find("MFA fehlgeschlagen", 1, true) == nil,
+    true,
+    "finishMfaAfterFederation.healthCheckNotMfaError")
+  healthCheckPage = false
   EndSession()
 end
 

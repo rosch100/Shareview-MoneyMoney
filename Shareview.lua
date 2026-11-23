@@ -8,7 +8,7 @@
 --
 
 WebBanking{
-  version     = 1.05,
+  version     = 1.06,
   url         = "https://portfolio.shareview.co.uk",
   services    = {"Shareview"},
   description = "Equiniti Shareview Portfolio - Direct Login (Username + Password + DOB + MFA)"
@@ -325,9 +325,15 @@ function tryHoldingsWithCurrentSession()
   if holdings and holdings ~= "" and isLoggedInPage(holdings) then
     session.holdingsHtmlString = holdings
     persistShareviewSessionCookies()
-    return true
+    return true, holdings
   end
-  return false
+  return false, holdings
+end
+
+function isHealthCheckPage(content)
+  if not content then return false end
+  return content:find("HealthCheckLanding", 1, true) ~= nil
+    or content:find("Account Health Check", 1, true) ~= nil
 end
 
 function bindShareviewLoginIdentity(rawUsername)
@@ -502,8 +508,12 @@ function finishMfaAfterFederation(hopContent, hopErr)
   if hopErr then
     return hopErr
   end
-  if tryHoldingsWithCurrentSession() then
+  local loggedIn, holdings = tryHoldingsWithCurrentSession()
+  if loggedIn then
     return nil
+  end
+  if isHealthCheckPage(holdings) then
+    return "Shareview verlangt einen Account Health Check. Bitte im Shareview-Portal (portfolio.shareview.co.uk) mit diesem Konto anmelden, die Prüfung abschließen und danach die Anmeldung in MoneyMoney erneut starten."
   end
   return "MFA fehlgeschlagen. Bitte Anmeldung erneut starten; bei wiederholten Fehlversuchen kann das Konto temporaer gesperrt sein."
 end
